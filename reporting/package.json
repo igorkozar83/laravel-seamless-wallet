@@ -1,0 +1,19 @@
+{
+  "name": "wallet-reporting",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Consumes wallet events from a Redis stream and maintains daily GGR reports",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "ioredis": "^5.4.0"
+  }
+}

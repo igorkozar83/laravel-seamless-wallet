@@ -1,0 +1,89 @@
+name: seamless-wallet
+
+# docker compose up -d --build                 start everything
+# docker compose run --rm wallet-api php artisan test
+
+x-wallet-env: &wallet-env
+  # local development key only — generate your own with `php artisan key:generate` anywhere else
+  APP_KEY: base64:+m14QlUKz9YhoCjgktfrXpmqZlGsGpPoKiqxqrm3emo=
+  APP_ENV: local
+  APP_DEBUG: "true"
+  DB_CONNECTION: pgsql
+  DB_HOST: pgsql
+  DB_PORT: 5432
+  DB_DATABASE: igaming
+  DB_USERNAME: igaming
+  DB_PASSWORD: secret
+  REDIS_HOST: redis
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: array
+  PROVIDER_WEBHOOK_SECRET: local-dev-secret
+  WALLET_EVENTS_STREAM: wallet-events
+
+services:
+  # Laravel on Octane (FrankenPHP)
+  wallet-api:
+    build: ./wallet-api
+    command: ["sh", "-c", "php artisan migrate --force --seed && exec php artisan octane:frankenphp --host=0.0.0.0 --port=8000 --workers=4 --max-requests=500"]
+    environment: *wallet-env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # publishes committed outbox rows to the Redis stream
+  outbox-relay:
+    build: ./wallet-api
+    command: ["php", "artisan", "outbox:relay"]
+    environment: *wallet-env
+    restart: on-failure          # waits out the first seconds while wallet-api runs migrations
+    depends_on:
+      wallet-api:
+        condition: service_started
+
+  # Node.js: game studios call this, it signs and forwards to the wallet API
+  gateway:
+    build: ./gateway
+    environment:
+      WALLET_API_URL: http://wallet-api:8000
+      PROVIDER_WEBHOOK_SECRET: local-dev-secret
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - wallet-api
+
+  # Node.js: consumes wallet events, serves daily reports
+  reporting:
+    build: ./reporting
+    environment:
+      REDIS_URL: redis://redis:6379
+      WALLET_EVENTS_STREAM: wallet-events
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      - redis
+
+  pgsql:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: igaming
+      POSTGRES_USER: igaming
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - ./wallet-api/docker/pgsql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgsql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U igaming -d igaming"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+
+volumes:
+  pgsql-data:
